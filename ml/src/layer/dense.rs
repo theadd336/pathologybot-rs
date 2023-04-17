@@ -1,6 +1,7 @@
 use std::cell::RefCell;
+use std::ops::SubAssign;
 
-use ndarray::{ArcArray, ArcArray2, Array, Array1, Array2, Ix2, NdFloat};
+use ndarray::{s, ArcArray, ArcArray2, Array, Array1, Array2, Axis, Ix2, NdFloat};
 use rand::distributions::uniform::SampleUniform;
 
 use crate::activation::{constant::ConstantActivation, ActivationFunction};
@@ -13,6 +14,7 @@ pub struct DenseLayer<A> {
     bias: Array1<A>,
     activation: Box<dyn ActivationFunction<A, Ix2>>,
     pre_activation_function_outputs: ArcArray2<A>,
+    learning_rate: A,
 }
 
 impl<A: NdFloat + SampleUniform> DenseLayer<A> {
@@ -20,6 +22,7 @@ impl<A: NdFloat + SampleUniform> DenseLayer<A> {
         input_size: usize,
         num_nodes: usize,
         activaton_fn: impl ActivationFunction<A, Ix2> + 'static,
+        learning_rate: A,
         weight_initializer: Option<Initializer>,
         bias_initializer: Option<Initializer>,
     ) -> Self {
@@ -38,6 +41,7 @@ impl<A: NdFloat + SampleUniform> DenseLayer<A> {
         Self {
             weights,
             bias,
+            learning_rate,
             activation: Box::new(activaton_fn),
             pre_activation_function_outputs: ArcArray2::zeros((0, 0)),
         }
@@ -60,15 +64,18 @@ impl<A: NdFloat> Layer<A> for DenseLayer<A> {
     fn backpropogate(
         &mut self,
         layer_input: ArcArray<A, Self::InputDim>,
-        layer_output: ArcArray<A, Self::OutputDim>,
         prior_errors: Array<A, Self::OutputDim>,
     ) -> Array<A, Self::InputDim> {
         let derivative = self
             .activation
             .compute_derivative(self.pre_activation_function_outputs.clone());
-        let dldw = layer_input.t() * (prior_errors * derivative);
-        let test = prior_errors * self.weights;
-        let test1 = prior_errors * self.weights;
-        // self.activation.backpropogate(prior_errrs);
+        let dldb = &prior_errors * derivative;
+        let dldw = layer_input.t().dot(&dldb);
+        let errors_for_prior_layer = &dldb * &self.weights.t();
+        self.weights = (&self.weights - (dldw * self.learning_rate)).to_owned();
+        self.bias = &self.bias
+            - (dldb.fold_axis(Axis(1), A::zero(), |accum, elem| *accum + *elem)
+                * self.learning_rate);
+        errors_for_prior_layer.to_owned()
     }
 }
