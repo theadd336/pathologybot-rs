@@ -1,20 +1,19 @@
-use std::cell::RefCell;
-use std::ops::SubAssign;
-
-use ndarray::{s, ArcArray, ArcArray2, Array, Array1, Array2, Axis, Ix2, NdFloat};
+use ndarray::{ArcArray, ArcArray2, Array, Array2, Ix2, NdFloat};
 use rand::distributions::uniform::SampleUniform;
 
-use crate::activation::{constant::ConstantActivation, ActivationFunction};
-use crate::initializer::{self, initialize_1d, Initializer};
+use crate::activation::ActivationFunction;
+use crate::initializer::{self, Initializer};
 
 use super::Layer;
 
 pub struct DenseLayer<A> {
     weights: Array2<A>,
-    bias: Array1<A>,
+    bias: Array2<A>,
     activation: Box<dyn ActivationFunction<A, Ix2>>,
     pre_activation_function_outputs: ArcArray2<A>,
     learning_rate: A,
+    #[allow(unused)]
+    batch_size: A,
 }
 
 impl<A: NdFloat + SampleUniform> DenseLayer<A> {
@@ -25,6 +24,7 @@ impl<A: NdFloat + SampleUniform> DenseLayer<A> {
         learning_rate: A,
         weight_initializer: Option<Initializer>,
         bias_initializer: Option<Initializer>,
+        batch_size: A,
     ) -> Self {
         let weights: Array2<A> = initializer::initialize_2d(
             weight_initializer.unwrap_or(Initializer::Random),
@@ -32,9 +32,9 @@ impl<A: NdFloat + SampleUniform> DenseLayer<A> {
             None,
             None,
         );
-        let bias = initialize_1d(
+        let bias = initializer::initialize_2d(
             bias_initializer.unwrap_or(Initializer::Zeros),
-            num_nodes,
+            (num_nodes, 1),
             None,
             None,
         );
@@ -42,6 +42,7 @@ impl<A: NdFloat + SampleUniform> DenseLayer<A> {
             weights,
             bias,
             learning_rate,
+            batch_size,
             activation: Box::new(activaton_fn),
             pre_activation_function_outputs: ArcArray2::zeros((0, 0)),
         }
@@ -70,12 +71,53 @@ impl<A: NdFloat> Layer<A> for DenseLayer<A> {
             .activation
             .compute_derivative(self.pre_activation_function_outputs.clone());
         let dldb = &prior_errors * derivative;
-        let dldw = layer_input.t().dot(&dldb);
-        let errors_for_prior_layer = &dldb * &self.weights.t();
-        self.weights = (&self.weights - (dldw * self.learning_rate)).to_owned();
-        self.bias = &self.bias
-            - (dldb.fold_axis(Axis(1), A::zero(), |accum, elem| *accum + *elem)
-                * self.learning_rate);
+        let dldw = dldb.dot(&layer_input.t());
+        let errors_for_prior_layer = self.weights.t().dot(&dldb);
+        // self.weights = &self.weights
+        //     - (dldw.fold_axis(Axis(2), A::zero(), |accum, elem| *accum + *elem)
+        //         * self.learning_rate
+        //         / self.batch_size);
+        println!("dldw: {dldw:?}");
+        self.weights = &self.weights - (dldw * self.learning_rate);
+        // self.bias = &self.bias
+        //     - (dldb.fold_axis(Axis(1), A::zero(), |accum, elem| *accum + *elem)
+        //         * self.learning_rate
+        //         / self.batch_size);
+        self.bias = &self.bias - &(dldb * self.learning_rate);
         errors_for_prior_layer.to_owned()
+    }
+}
+
+#[cfg(test)]
+pub mod test {
+    use super::*;
+    use crate::activation::relu::ReLUActivation;
+    use ndarray::array;
+
+    #[test]
+    fn test_dense_layer() {
+        let starting_weights = array![[0.3, 0.2], [-0.1, 0.1]];
+        let input = array![[0.7], [0.5]];
+        let starting_bias = array![[0.2], [-0.1]];
+
+        let mut layer = DenseLayer {
+            weights: starting_weights,
+            bias: starting_bias,
+            activation: Box::new(ReLUActivation::new()),
+            pre_activation_function_outputs: ArcArray2::zeros((0, 0)),
+            learning_rate: 1.0,
+            batch_size: 1.0,
+        };
+        let output = layer.compute(input.to_shared());
+        assert_eq!(output, array![[0.51], [0.0]]);
+
+        let prior_errors = array![[-0.168], [0.056]];
+        let backprop_output = layer.backpropogate(input.to_shared(), prior_errors);
+        assert_eq!(backprop_output, array![[-0.0504], [-0.033600000000000005]]);
+        assert_eq!(
+            layer.weights,
+            array![[0.41759999999999997, 0.28400000000000003], [-0.1, 0.1]]
+        );
+        assert_eq!(layer.bias, array![[0.368], [-0.1]]);
     }
 }
