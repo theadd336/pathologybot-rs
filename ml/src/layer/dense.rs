@@ -1,4 +1,4 @@
-use ndarray::{ArcArray, ArcArray2, Array, Array2, Ix2, NdFloat};
+use ndarray::{s, ArcArray, ArcArray2, Array, Array2, Array3, Axis, Ix2, NdFloat};
 use rand::distributions::uniform::SampleUniform;
 
 use crate::activation::ActivationFunction;
@@ -71,19 +71,32 @@ impl<A: NdFloat> Layer<A> for DenseLayer<A> {
             .activation
             .compute_derivative(self.pre_activation_function_outputs.clone());
         let dldb = &prior_errors * derivative;
-        let dldw = dldb.dot(&layer_input.t());
+
+        let dldb_t = dldb.t();
+        assert_eq!(layer_input.ncols(), dldb_t.nrows());
+
+        let mut dldw = Array3::uninit([
+            layer_input.ncols(),
+            self.weights.nrows(),
+            self.weights.ncols(),
+        ]);
+        for (index, (layer_input_col, dldb_row)) in layer_input
+            .columns()
+            .into_iter()
+            .zip(dldb_t.rows())
+            .enumerate()
+        {
+            let dldb_row = dldb_row.broadcast((1, dldb_row.dim())).unwrap();
+            let layer_input_col = layer_input_col.insert_axis(Axis(1));
+            let dldw_single_batch = layer_input_col.dot(&dldb_row);
+            dldw_single_batch.assign_to(dldw.slice_mut(s![index, .., ..]));
+        }
+        let dldw = unsafe { dldw.assume_init() };
         let errors_for_prior_layer = self.weights.t().dot(&dldb);
-        // self.weights = &self.weights
-        //     - (dldw.fold_axis(Axis(2), A::zero(), |accum, elem| *accum + *elem)
-        //         * self.learning_rate
-        //         / self.batch_size);
-        println!("dldw: {dldw:?}");
-        self.weights = &self.weights - (dldw * self.learning_rate);
-        // self.bias = &self.bias
-        //     - (dldb.fold_axis(Axis(1), A::zero(), |accum, elem| *accum + *elem)
-        //         * self.learning_rate
-        //         / self.batch_size);
-        self.bias = &self.bias - &(dldb * self.learning_rate);
+        self.weights =
+            &self.weights - (dldw.sum_axis(Axis(0)) * self.learning_rate / self.batch_size);
+        self.bias = &self.bias
+            - (dldb.sum_axis(Axis(1)).insert_axis(Axis(1)) * self.learning_rate / self.batch_size);
         errors_for_prior_layer.to_owned()
     }
 }
@@ -116,7 +129,7 @@ pub mod test {
         assert_eq!(backprop_output, array![[-0.0504], [-0.033600000000000005]]);
         assert_eq!(
             layer.weights,
-            array![[0.41759999999999997, 0.28400000000000003], [-0.1, 0.1]]
+            array![[0.41759999999999997, 0.2], [-0.016, 0.1]]
         );
         assert_eq!(layer.bias, array![[0.368], [-0.1]]);
     }
