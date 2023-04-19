@@ -110,7 +110,7 @@ pub mod test {
     #[test]
     fn test_dense_layer() {
         let starting_weights = array![[0.3, 0.2], [-0.1, 0.1]];
-        let input = array![[0.7], [0.5]];
+        let input = array![[0.7, 0.7], [0.5, 0.5]];
         let starting_bias = array![[0.2], [-0.1]];
 
         let mut layer = DenseLayer {
@@ -119,14 +119,20 @@ pub mod test {
             activation: Box::new(ReLUActivation::new()),
             pre_activation_function_outputs: ArcArray2::zeros((0, 0)),
             learning_rate: 1.0,
-            batch_size: 1.0,
+            batch_size: 2.0,
         };
         let output = layer.compute(input.to_shared());
-        assert_eq!(output, array![[0.51], [0.0]]);
+        assert_eq!(output, array![[0.51, 0.51], [0.0, 0.0]]);
 
-        let prior_errors = array![[-0.168], [0.056]];
+        let prior_errors = array![[-0.168, -0.168], [0.056, 0.056]];
         let backprop_output = layer.backpropogate(input.to_shared(), prior_errors);
-        assert_eq!(backprop_output, array![[-0.0504], [-0.033600000000000005]]);
+        assert_eq!(
+            backprop_output,
+            array![
+                [-0.0504, -0.0504],
+                [-0.033600000000000005, -0.033600000000000005]
+            ]
+        );
         assert_eq!(
             layer.weights,
             array![[0.41759999999999997, 0.2], [-0.016, 0.1]]
