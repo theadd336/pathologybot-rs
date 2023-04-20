@@ -1,10 +1,33 @@
 use ndarray::{s, ArcArray, ArcArray2, Array, Array2, Array3, Axis, Ix2, NdFloat};
 use rand::distributions::uniform::SampleUniform;
 
+use crate::activation::constant::ConstantActivation;
 use crate::activation::ActivationFunction;
 use crate::initializer::{self, Initializer};
 
 use super::Layer;
+
+pub struct DenseLayerBuilder<A> {
+    starting_weights: Option<Array2<A>>,
+    starting_bias: Option<Array2<A>>,
+    activation: Option<Box<dyn ActivationFunction<A, Ix2>>>,
+    learning_rate: A,
+    weight_initializer: Option<Initializer>,
+    bias_initializer: Option<Initializer>,
+}
+
+impl<A: NdFloat> DenseLayerBuilder<A> {
+    pub fn new() -> Self {
+        Self {
+            starting_weights: None,
+            starting_bias: None,
+            activation: Some(Box::new(ConstantActivation)),
+            learning_rate: A::zero(),
+            weight_initializer: Some(Initializer::Random),
+            bias_initializer: Some(Initializer::Zeros),
+        }
+    }
+}
 
 pub struct DenseLayer<A> {
     weights: Array2<A>,
@@ -12,7 +35,6 @@ pub struct DenseLayer<A> {
     activation: Box<dyn ActivationFunction<A, Ix2>>,
     pre_activation_function_outputs: ArcArray2<A>,
     learning_rate: A,
-    #[allow(unused)]
     batch_size: A,
 }
 

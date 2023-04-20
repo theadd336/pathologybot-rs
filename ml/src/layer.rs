@@ -12,3 +12,8 @@ pub trait Layer<A> {
         prior_errors: Array<A, Self::OutputDim>,
     ) -> Array<A, Self::InputDim>;
 }
+
+pub trait LayerBuilder<A> {
+    type LayerImpl: Layer<A>;
+    fn build(batch_size: A, num_inputs: usize) -> Self::LayerImpl;
+}
