@@ -6,7 +6,7 @@ use crate::initializer::{self, Initializer};
 use crate::optimizers::Optimizer;
 use crate::shared::MlNumber;
 
-use super::{Layer, LayerBuilder};
+use super::{Layer, LayerBuilder, LayerType};
 
 pub struct DenseLayerBuilder<A> {
     #[allow(unused)]
@@ -33,10 +33,8 @@ impl<A: MlNumber> DenseLayerBuilder<A> {
 }
 
 impl<A: MlNumber, O: Optimizer<A>> LayerBuilder<A, O> for DenseLayerBuilder<A> {
-    type LayerImpl = DenseLayer<A, O>;
-
-    fn build(self, optimizer: O, batch_size: A, input_size: usize) -> Self::LayerImpl {
-        DenseLayer::new(
+    fn build(self, optimizer: O, batch_size: A, input_size: usize) -> LayerType<A, O> {
+        LayerType::Dense(DenseLayer::new(
             input_size,
             self.num_nodes.unwrap(),
             self.activation.unwrap(),
@@ -44,7 +42,7 @@ impl<A: MlNumber, O: Optimizer<A>> LayerBuilder<A, O> for DenseLayerBuilder<A> {
             self.bias_initializer,
             batch_size,
             optimizer,
-        )
+        ))
     }
 }
 
@@ -96,6 +94,10 @@ impl<A: MlNumber, O: Optimizer<A>> Layer<A, O> for DenseLayer<A, O> {
     type InputDim = Ix2;
 
     type OutputDim = Ix2;
+
+    fn output_shape(&self) -> &[usize] {
+        &self.bias.shape()[0..1]
+    }
 
     fn compute(&mut self, input: ArcArray<A, Self::InputDim>) -> ArcArray<A, Self::OutputDim> {
         let after_weights = self.weights.dot(&input);
