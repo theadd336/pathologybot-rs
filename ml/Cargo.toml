@@ -8,4 +8,5 @@ edition = "2021"
 [dependencies]
 derive_builder = "0.12"
 ndarray = "0.15"
+ndarray-rand = "0.14.0"
 rand = "0.8"

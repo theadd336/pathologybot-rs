@@ -1,10 +1,12 @@
-use ndarray::{ArcArray, Dimension, NdFloat};
+use ndarray::{ArcArray, Dimension};
+
+use crate::shared::MlNumber;
 
 use super::ActivationFunction;
 
 pub struct ConstantActivation;
 
-impl<A: NdFloat, D: Dimension> ActivationFunction<A, D> for ConstantActivation {
+impl<A: MlNumber, D: Dimension> ActivationFunction<A, D> for ConstantActivation {
     fn compute(&self, inputs: ArcArray<A, D>) -> ArcArray<A, D> {
         inputs
     }

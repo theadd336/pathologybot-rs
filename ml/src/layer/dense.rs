@@ -1,52 +1,72 @@
-use ndarray::{s, ArcArray, ArcArray2, Array, Array2, Array3, Axis, Ix2, NdFloat};
-use rand::distributions::uniform::SampleUniform;
+use ndarray::{s, ArcArray, ArcArray2, Array, Array2, Array3, Axis, Ix2};
 
 use crate::activation::constant::ConstantActivation;
 use crate::activation::ActivationFunction;
 use crate::initializer::{self, Initializer};
+use crate::optimizers::Optimizer;
+use crate::shared::MlNumber;
 
-use super::Layer;
+use super::{Layer, LayerBuilder};
 
 pub struct DenseLayerBuilder<A> {
+    #[allow(unused)]
     starting_weights: Option<Array2<A>>,
+    #[allow(unused)]
     starting_bias: Option<Array2<A>>,
     activation: Option<Box<dyn ActivationFunction<A, Ix2>>>,
-    learning_rate: A,
     weight_initializer: Option<Initializer>,
     bias_initializer: Option<Initializer>,
+    num_nodes: Option<usize>,
 }
 
-impl<A: NdFloat> DenseLayerBuilder<A> {
+impl<A: MlNumber> DenseLayerBuilder<A> {
     pub fn new() -> Self {
         Self {
             starting_weights: None,
             starting_bias: None,
             activation: Some(Box::new(ConstantActivation)),
-            learning_rate: A::zero(),
             weight_initializer: Some(Initializer::Random),
             bias_initializer: Some(Initializer::Zeros),
+            num_nodes: None,
         }
     }
 }
 
-pub struct DenseLayer<A> {
+impl<A: MlNumber, O: Optimizer<A>> LayerBuilder<A, O> for DenseLayerBuilder<A> {
+    type LayerImpl = DenseLayer<A, O>;
+
+    fn build(self, optimizer: O, batch_size: A, input_size: usize) -> Self::LayerImpl {
+        DenseLayer::new(
+            input_size,
+            self.num_nodes.unwrap(),
+            self.activation.unwrap(),
+            self.weight_initializer,
+            self.bias_initializer,
+            batch_size,
+            optimizer,
+        )
+    }
+}
+
+pub struct DenseLayer<A, O> {
     weights: Array2<A>,
     bias: Array2<A>,
     activation: Box<dyn ActivationFunction<A, Ix2>>,
     pre_activation_function_outputs: ArcArray2<A>,
-    learning_rate: A,
     batch_size: A,
+    weight_optimizer: O,
+    bias_optimizer: O,
 }
 
-impl<A: NdFloat + SampleUniform> DenseLayer<A> {
+impl<A: MlNumber, O: Optimizer<A>> DenseLayer<A, O> {
     pub(crate) fn new(
         input_size: usize,
         num_nodes: usize,
-        activaton_fn: impl ActivationFunction<A, Ix2> + 'static,
-        learning_rate: A,
+        activation: Box<dyn ActivationFunction<A, Ix2>>,
         weight_initializer: Option<Initializer>,
         bias_initializer: Option<Initializer>,
         batch_size: A,
+        optimizer: O,
     ) -> Self {
         let weights: Array2<A> = initializer::initialize_2d(
             weight_initializer.unwrap_or(Initializer::Random),
@@ -63,15 +83,16 @@ impl<A: NdFloat + SampleUniform> DenseLayer<A> {
         Self {
             weights,
             bias,
-            learning_rate,
             batch_size,
-            activation: Box::new(activaton_fn),
+            activation,
             pre_activation_function_outputs: ArcArray2::zeros((0, 0)),
+            weight_optimizer: optimizer.clone(),
+            bias_optimizer: optimizer,
         }
     }
 }
 
-impl<A: NdFloat> Layer<A> for DenseLayer<A> {
+impl<A: MlNumber, O: Optimizer<A>> Layer<A, O> for DenseLayer<A, O> {
     type InputDim = Ix2;
 
     type OutputDim = Ix2;
@@ -115,10 +136,15 @@ impl<A: NdFloat> Layer<A> for DenseLayer<A> {
         }
         let dldw = unsafe { dldw.assume_init() };
         let errors_for_prior_layer = self.weights.t().dot(&dldb);
-        self.weights =
-            &self.weights - (dldw.sum_axis(Axis(0)) * self.learning_rate / self.batch_size);
+
+        self.weights = &self.weights
+            - self
+                .weight_optimizer
+                .optimize(dldw.sum_axis(Axis(0)) / self.batch_size);
         self.bias = &self.bias
-            - (dldb.sum_axis(Axis(1)).insert_axis(Axis(1)) * self.learning_rate / self.batch_size);
+            - self
+                .bias_optimizer
+                .optimize(dldb.sum_axis(Axis(1)).insert_axis(Axis(1)) / self.batch_size);
         errors_for_prior_layer.to_owned()
     }
 }
@@ -126,7 +152,7 @@ impl<A: NdFloat> Layer<A> for DenseLayer<A> {
 #[cfg(test)]
 pub mod test {
     use super::*;
-    use crate::activation::relu::ReLUActivation;
+    use crate::{activation::relu::ReLUActivation, optimizers::sgd::SGD};
     use ndarray::array;
 
     #[test]
@@ -140,8 +166,9 @@ pub mod test {
             bias: starting_bias,
             activation: Box::new(ReLUActivation::new()),
             pre_activation_function_outputs: ArcArray2::zeros((0, 0)),
-            learning_rate: 1.0,
             batch_size: 2.0,
+            bias_optimizer: SGD::new(1.0),
+            weight_optimizer: SGD::new(1.0),
         };
         let output = layer.compute(input.to_shared());
         assert_eq!(output, array![[0.51, 0.51], [0.0, 0.0]]);

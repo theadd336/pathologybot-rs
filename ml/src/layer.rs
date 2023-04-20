@@ -1,8 +1,10 @@
-use ndarray::{ArcArray, Array};
+use ndarray::{ArcArray, Array, NdFloat};
+
+use crate::optimizers::Optimizer;
 
 pub mod dense;
 
-pub trait Layer<A> {
+pub trait Layer<A, O> {
     type InputDim;
     type OutputDim;
     fn compute(&mut self, input: ArcArray<A, Self::InputDim>) -> ArcArray<A, Self::OutputDim>;
@@ -13,7 +15,7 @@ pub trait Layer<A> {
     ) -> Array<A, Self::InputDim>;
 }
 
-pub trait LayerBuilder<A> {
-    type LayerImpl: Layer<A>;
-    fn build(batch_size: A, num_inputs: usize) -> Self::LayerImpl;
+pub trait LayerBuilder<A: NdFloat, O: Optimizer<A>> {
+    type LayerImpl: Layer<A, O>;
+    fn build(self, optimizer: O, batch_size: A, input_size: usize) -> Self::LayerImpl;
 }

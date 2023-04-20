@@ -1,4 +1,5 @@
 use ndarray::{Array1, Array2, NdFloat};
+use ndarray_rand::RandomExt;
 use rand::distributions::{uniform::SampleUniform, Uniform};
 use rand::prelude::Distribution;
 
@@ -39,9 +40,8 @@ pub fn initialize_2d<A: NdFloat + SampleUniform>(
         Initializer::Zeros => Array2::zeros(shape),
         Initializer::Ones => Array2::ones(shape),
         Initializer::Random => {
-            let mut rng = rand::thread_rng();
-            let uniform_sample: Uniform<A> = Uniform::from(start..end);
-            Array2::from_shape_simple_fn(shape, || uniform_sample.sample(&mut rng))
+            let uniform = ndarray_rand::rand_distr::Uniform::new(start, end);
+            Array2::random(shape, uniform)
         }
     }
 }
