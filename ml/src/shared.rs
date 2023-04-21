@@ -1,4 +1,4 @@
-use conv::{ValueFrom, ValueInto};
+use conv::ValueFrom;
 use ndarray::NdFloat;
 use ndarray_rand::rand_distr::uniform::SampleUniform;
 

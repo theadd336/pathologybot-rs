@@ -1,4 +1,4 @@
-use ndarray::{s, ArcArray, ArcArray2, Array, Array2, Array3, Axis, Ix2};
+use ndarray::{s, ArcArray, ArcArray2, Array, Array2, Array3, Axis, Ix2, IxDyn};
 
 use crate::activation::constant::ConstantActivation;
 use crate::activation::ActivationFunction;
@@ -6,7 +6,7 @@ use crate::initializer::{self, Initializer};
 use crate::optimizers::Optimizer;
 use crate::shared::MlNumber;
 
-use super::{Layer, LayerBuilder, LayerType};
+use super::{Layer, LayerBuilder};
 
 pub struct DenseLayerBuilder<A> {
     #[allow(unused)]
@@ -32,9 +32,9 @@ impl<A: MlNumber> DenseLayerBuilder<A> {
     }
 }
 
-impl<A: MlNumber, O: Optimizer<A>> LayerBuilder<A, O> for DenseLayerBuilder<A> {
-    fn build(self, optimizer: O, batch_size: A, input_size: usize) -> LayerType<A, O> {
-        LayerType::Dense(DenseLayer::new(
+impl<A: MlNumber, O: Optimizer<A> + 'static> LayerBuilder<A, O> for DenseLayerBuilder<A> {
+    fn build(self, optimizer: O, batch_size: A, input_size: usize) -> Box<dyn Layer<A, O>> {
+        Box::new(DenseLayer::new(
             input_size,
             self.num_nodes.unwrap(),
             self.activation.unwrap(),
@@ -91,27 +91,29 @@ impl<A: MlNumber, O: Optimizer<A>> DenseLayer<A, O> {
 }
 
 impl<A: MlNumber, O: Optimizer<A>> Layer<A, O> for DenseLayer<A, O> {
-    type InputDim = Ix2;
-
-    type OutputDim = Ix2;
-
     fn output_shape(&self) -> &[usize] {
         &self.bias.shape()[0..1]
     }
 
-    fn compute(&mut self, input: ArcArray<A, Self::InputDim>) -> ArcArray<A, Self::OutputDim> {
+    fn compute(&mut self, input: ArcArray<A, IxDyn>) -> ArcArray<A, IxDyn> {
+        let input: ArcArray2<A> = input.into_dimensionality().unwrap();
         let after_weights = self.weights.dot(&input);
         let after_bias = after_weights + &self.bias;
         self.pre_activation_function_outputs = after_bias.into();
-        self.activation
-            .compute(self.pre_activation_function_outputs.clone())
+        (self
+            .activation
+            .compute(self.pre_activation_function_outputs.clone()))
+        .into_dimensionality()
+        .unwrap()
     }
 
     fn backpropogate(
         &mut self,
-        layer_input: ArcArray<A, Self::InputDim>,
-        prior_errors: Array<A, Self::OutputDim>,
-    ) -> Array<A, Self::InputDim> {
+        layer_input: ArcArray<A, IxDyn>,
+        prior_errors: Array<A, IxDyn>,
+    ) -> Array<A, IxDyn> {
+        let layer_input: ArcArray2<A> = layer_input.into_dimensionality().unwrap();
+        let prior_errors: Array2<A> = prior_errors.into_dimensionality().unwrap();
         let derivative = self
             .activation
             .compute_derivative(self.pre_activation_function_outputs.clone());
@@ -147,7 +149,7 @@ impl<A: MlNumber, O: Optimizer<A>> Layer<A, O> for DenseLayer<A, O> {
             - self
                 .bias_optimizer
                 .optimize(dldb.sum_axis(Axis(1)).insert_axis(Axis(1)) / self.batch_size);
-        errors_for_prior_layer.to_owned()
+        errors_for_prior_layer.to_owned().into_dyn()
     }
 }
 
@@ -172,17 +174,19 @@ pub mod test {
             bias_optimizer: SGD::new(1.0),
             weight_optimizer: SGD::new(1.0),
         };
-        let output = layer.compute(input.to_shared());
-        assert_eq!(output, array![[0.51, 0.51], [0.0, 0.0]]);
+        let output = layer.compute(input.to_shared().into_dyn());
+        assert_eq!(output, array![[0.51, 0.51], [0.0, 0.0]].into_dyn());
 
         let prior_errors = array![[-0.168, -0.168], [0.056, 0.056]];
-        let backprop_output = layer.backpropogate(input.to_shared(), prior_errors);
+        let backprop_output =
+            layer.backpropogate(input.to_shared().into_dyn(), prior_errors.into_dyn());
         assert_eq!(
             backprop_output,
             array![
                 [-0.0504, -0.0504],
                 [-0.033600000000000005, -0.033600000000000005]
             ]
+            .into_dyn()
         );
         assert_eq!(
             layer.weights,

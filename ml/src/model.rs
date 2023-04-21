@@ -1,15 +1,15 @@
-use conv::{ConvUtil, ValueFrom, ValueInto};
-use ndarray::{Array, Dimension};
+use conv::ValueInto;
+use ndarray::{ArcArray, IxDyn};
 
 use crate::{
-    layer::{LayerBuilder, LayerType},
+    layer::{Layer, LayerBuilder},
     loss::Loss,
     optimizers::Optimizer,
     shared::MlNumber,
 };
 
 pub struct Model<A, O, L> {
-    layers: Vec<LayerType<A, O>>,
+    layers: Vec<Box<dyn Layer<A, O>>>,
     optimizer: O,
     loss: L,
     next_input_shape: Vec<usize>,
@@ -33,13 +33,15 @@ impl<A: MlNumber, O: Optimizer<A>, L: Loss<A>> Model<A, O, L> {
             self.batch_size,
             self.next_input_shape[0],
         );
-        self.next_input_shape = layer_impl.output_shape();
+        self.next_input_shape = layer_impl.output_shape().into();
         self.layers.push(layer_impl);
     }
 
-    pub fn train<D: Dimension>(&mut self, training_data: Array<A, D>) {
+    pub fn train(&mut self, training_data: ArcArray<A, IxDyn>) {
+        let mut next_input = training_data;
         for layer in self.layers.iter_mut() {
-            // let output = laye
+            let output = layer.compute(next_input);
+            next_input = output;
         }
     }
 }

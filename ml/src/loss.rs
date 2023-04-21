@@ -1,3 +1,10 @@
-use ndarray::NdFloat;
+use ndarray::{ArcArray, Array, IxDyn};
 
-pub trait Loss<A: NdFloat> {}
+use crate::shared::MlNumber;
+
+pub trait Loss<A: MlNumber> {
+    fn compute_loss(
+        computed_output: ArcArray<A, IxDyn>,
+        expected_output: ArcArray<A, IxDyn>,
+    ) -> Array<A, IxDyn>;
+}
