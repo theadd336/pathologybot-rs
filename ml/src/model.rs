@@ -7,9 +7,6 @@ use crate::{
     shared::MlNumber,
 };
 
-// TODO: batch size should be first dimension, not last
-// TODO: remove batch_size from layers.
-
 pub struct Model<A, O, L> {
     layers: Vec<Box<dyn Layer<A, O>>>,
     optimizer: O,

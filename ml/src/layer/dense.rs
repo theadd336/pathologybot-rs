@@ -115,7 +115,6 @@ impl<A: MlNumber, O: Optimizer<A>> Layer<A, O> for DenseLayer<A, O> {
             .activation
             .compute_derivative(self.pre_activation_function_outputs.clone());
         let dldb = &prior_errors * derivative;
-        println!("dldb: {dldb:?}");
         let layer_input_t = layer_input.t();
         assert_eq!(layer_input_t.ncols(), dldb.nrows());
 
@@ -136,8 +135,6 @@ impl<A: MlNumber, O: Optimizer<A>> Layer<A, O> for DenseLayer<A, O> {
             dldw_single_batch.assign_to(dldw.slice_mut(s![index, .., ..]));
         }
         let dldw = unsafe { dldw.assume_init() };
-        println!("dldw: {dldw:?}");
-
         let errors_for_prior_layer = dldb.dot(&self.weights.t());
 
         self.weights = &self.weights
