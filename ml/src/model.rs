@@ -1,4 +1,3 @@
-use conv::ValueInto;
 use ndarray::{Array, Axis, IxDyn, Slice};
 
 use crate::{
@@ -16,7 +15,6 @@ pub struct Model<A, O, L> {
     optimizer: O,
     loss: L,
     next_input_shape: Vec<usize>,
-    batch_size: A,
 }
 
 impl<A: MlNumber, O: Optimizer<A>, L: Loss<A>> Model<A, O, L> {
@@ -26,16 +24,11 @@ impl<A: MlNumber, O: Optimizer<A>, L: Loss<A>> Model<A, O, L> {
             loss,
             layers: Vec::new(),
             next_input_shape: vec![input_size, batch_size],
-            batch_size: batch_size.value_into().unwrap(),
         }
     }
 
     pub fn add_layer(&mut self, layer: impl LayerBuilder<A, O>) {
-        let layer_impl = layer.build(
-            self.optimizer.clone(),
-            self.batch_size,
-            self.next_input_shape[0],
-        );
+        let layer_impl = layer.build(self.optimizer.clone(), self.next_input_shape[0]);
         self.next_input_shape = layer_impl.output_shape().into();
         self.layers.push(layer_impl);
     }

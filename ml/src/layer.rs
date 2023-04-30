@@ -15,5 +15,5 @@ pub trait Layer<A, O> {
 }
 
 pub trait LayerBuilder<A: MlNumber, O: Optimizer<A>> {
-    fn build(self, optimizer: O, batch_size: A, input_size: usize) -> Box<dyn Layer<A, O>>;
+    fn build(self, optimizer: O, input_size: usize) -> Box<dyn Layer<A, O>>;
 }
