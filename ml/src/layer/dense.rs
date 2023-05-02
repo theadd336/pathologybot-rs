@@ -264,7 +264,10 @@ pub mod test {
             .into_dyn()
         );
 
-        assert_eq!(layer.weights, array![[]]);
+        assert_eq!(
+            layer.weights,
+            array![[-0.18560000000000001, 0.08560000000000001], [0.1, 0.2]]
+        );
         assert_eq!(layer.bias, array![[-0.4600000000000001, 0.56]]);
     }
 }

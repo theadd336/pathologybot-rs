@@ -2,6 +2,8 @@ use ndarray::{ArcArray, Array, IxDyn};
 
 use crate::shared::MlNumber;
 
+pub mod categorical_cross_entropy;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LossType {
     CategoricalCrossEntropy,
