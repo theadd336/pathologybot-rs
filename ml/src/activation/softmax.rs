@@ -14,9 +14,15 @@ impl SoftmaxActivation {
     }
 }
 
+impl Default for SoftmaxActivation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<A: MlNumber, D: Dimension + RemoveAxis> ActivationFunction<A, D> for SoftmaxActivation {
     fn compute(&self, inputs: ndarray::ArcArray<A, D>) -> ndarray::ArcArray<A, D> {
-        let axis = self.axis.unwrap_or(Axis(inputs.shape().len() - 1));
+        let axis = self.axis.unwrap_or_else(|| Axis(inputs.shape().len() - 1));
         let outputs = inputs.map(|elem| elem.exp());
         let sums = outputs.sum_axis(axis);
         (outputs / sums).to_shared()

@@ -32,6 +32,12 @@ impl<A: MlNumber> DenseLayerBuilder<A> {
     }
 }
 
+impl<A: MlNumber> Default for DenseLayerBuilder<A> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<A: MlNumber, O: Optimizer<A> + 'static> LayerBuilder<A, O> for DenseLayerBuilder<A> {
     fn build(self, optimizer: O, input_size: usize) -> Box<dyn Layer<A, O>> {
         Box::new(DenseLayer::new(
@@ -108,7 +114,7 @@ impl<A: MlNumber, O: Optimizer<A>> DenseLayer<A, O> {
 
 impl<A: MlNumber, O: Optimizer<A>> Layer<A, O> for DenseLayer<A, O> {
     fn output_shape(&self) -> &[usize] {
-        &self.bias.shape()
+        self.bias.shape()
     }
 
     fn compute(&mut self, input: ArcArray<A, IxDyn>) -> ArcArray<A, IxDyn> {
