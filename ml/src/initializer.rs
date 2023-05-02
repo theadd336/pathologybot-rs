@@ -15,8 +15,8 @@ pub fn initialize_1d<A: NdFloat + SampleUniform>(
     start: Option<A>,
     end: Option<A>,
 ) -> Array1<A> {
-    let start = start.unwrap_or(A::neg(A::one()));
-    let end = end.unwrap_or(A::one());
+    let start = start.unwrap_or_else(|| A::neg(A::one()));
+    let end = end.unwrap_or_else(A::one);
     match initializer {
         Initializer::Zeros => Array1::zeros(len),
         Initializer::Ones => Array1::ones(len),
@@ -34,8 +34,8 @@ pub fn initialize_2d<A: NdFloat + SampleUniform>(
     start: Option<A>,
     end: Option<A>,
 ) -> Array2<A> {
-    let start = start.unwrap_or(A::neg(A::one()));
-    let end = end.unwrap_or(A::one());
+    let start = start.unwrap_or_else(|| A::neg(A::one()));
+    let end = end.unwrap_or_else(A::one);
     match initializer {
         Initializer::Zeros => Array2::zeros(shape),
         Initializer::Ones => Array2::ones(shape),

@@ -42,4 +42,8 @@ impl<A: MlNumber, D: Dimension> ActivationFunction<A, D> for ReLUActivation<A> {
             })
             .to_shared()
     }
+
+    fn activation_type(&self) -> super::ActivationType {
+        super::ActivationType::ReLU
+    }
 }

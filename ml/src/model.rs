@@ -84,10 +84,31 @@ impl<A: MlNumber, O: Optimizer<A>, L: Loss<A>> Model<A, O, L> {
                     .loss
                     .compute_loss(next_input.clone(), batched_labels.clone());
                 println!("Epoch: {epoch}, loss: {loss:?}");
-                let mut backprop_error = self.loss.compute_derivative(next_input, batched_labels);
-                for (layer, layer_input) in self.layers.iter_mut().rev().zip(layer_inputs.drain(..))
+                let mut backprop_error = Array::zeros((0,)).into_dyn();
+                for (index, (layer, layer_input)) in self
+                    .layers
+                    .iter_mut()
+                    .rev()
+                    .zip(layer_inputs.drain(..))
+                    .enumerate()
                 {
-                    backprop_error = layer.backpropogate(layer_input, backprop_error);
+                    if index == 0 {
+                        if layer.has_specialization(self.loss.loss_type()) {
+                            backprop_error = layer.backpropogate_specialized(
+                                layer_input,
+                                next_input.clone(),
+                                batched_labels.clone(),
+                                self.loss.loss_type(),
+                            )
+                        } else {
+                            backprop_error = self
+                                .loss
+                                .compute_derivative(next_input.clone(), batched_labels.clone());
+                            backprop_error = layer.backpropogate(layer_input, backprop_error);
+                        }
+                    } else {
+                        backprop_error = layer.backpropogate(layer_input, backprop_error);
+                    }
                 }
             }
         }
