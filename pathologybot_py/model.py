@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from multiprocessing import Queue
@@ -8,6 +9,7 @@ import tensorflow as tf
 from pathologybot_py.gym.types import Gym, EnvState
 
 NUM_ACTIONS = 4
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -19,15 +21,42 @@ class AgentOutputs:
 
 
 class IMPALALoss(tf.keras.losses.Loss):
-    def __init__(self, rho_bar=1.0, c_bar=1.0):
+    def __init__(self, rho_bar=1.0, c_bar=1.0, discount_factor=0.5):
         super().__init__()
         self.rho_bar = rho_bar
         self.c_bar = c_bar
+        self.discount_factor = discount_factor
 
-    def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
-        print(y_pred)
-        # raise ValueError(f"{y_true, y_pred}")
+    def _calculate_rho_s(self, actor_policy, learner_policy) -> tf.Tensor:
+        return tf.minimum(tf.constant([self.rho_bar]), learner_policy / actor_policy)
+    
+    def _calculate_c_t(self, actor_policy, learner_policy) -> tf.Tensor:
+        return tf.minimum(tf.constant([self.c_bar]), learner_policy / actor_policy)
+
+    def _compute_vtrace(self, message: AgentOutputs, y_pred: tf.Tensor):
+        learner_policy = y_pred[:, :NUM_ACTIONS]
+        learner_values = y_pred[:, NUM_ACTIONS]
+        actor_policies = np.concatenate(message.policies, axis=0)
+        rho_s = self._calculate_rho_s(actor_policies, learner_policy)
+        delta_t_V = rho_s * (
+            tf.constant(message.rewards[:-1])
+            + self.discount_factor * learner_values[1:]
+            - learner_values[:-1]
+        )
+        # TODO: need to figure out the ci product
+        c_s = self._calculate_c_s(actor_policies, learner_policy)
+        last_vs = learner_values[:-1] + 
+        print(f"Shape: {y_pred.shape}")
+
+    def _compute_value_loss(self, vtrace: np.ndarray, y_pred: tf.Tensor) -> tf.Tensor:
+        pass
+
+    def call(self, y_true: AgentOutputs, y_pred: tf.Tensor) -> tf.Tensor:
+        vtrace = self._compute_vtrace(y_true, y_pred)
         return 0.5 * (y_true - y_pred) ** 2
+
+    def __call__(self, y_true, y_pred, sample_weight=None):
+        return self.call(y_true, y_pred)
 
 
 class ModelSize(Enum):
@@ -44,7 +73,8 @@ class ImpalaModel:
     def __init__(self, size: ModelSize, mode=ModelMode.Actor, name=""):
         if size == ModelSize.Smol:
             input = tf.keras.Input(
-                shape=(40, 40, 1), batch_size=1 if mode == ModelMode.Actor else None
+                shape=(40, 40, 1),
+                batch_size=1 if mode == ModelMode.Actor else None,
             )
             layers = [
                 tf.keras.layers.Conv2D(
@@ -58,13 +88,21 @@ class ImpalaModel:
                 ),
                 tf.keras.layers.Flatten(),
                 tf.keras.layers.Dense(units=256, activation="relu"),
-                tf.keras.layers.Reshape(target_shape=(1, 256)),
             ]
-            lstm = tf.keras.layers.LSTM(256, stateful=mode == ModelMode.Actor)
+            lstm = tf.keras.layers.LSTM(
+                256,
+                stateful=mode == ModelMode.Actor,
+                return_sequences=mode == ModelMode.Learner,
+            )
             prior_layer = input
             for layer in layers:
                 prior_layer = layer(prior_layer)
-            prior_layer = lstm(prior_layer)
+            if mode == ModelMode.Learner:
+                prior_layer = tf.expand_dims(prior_layer, axis=0)
+                prior_layer = lstm(prior_layer)
+                prior_layer = tf.squeeze(prior_layer, axis=[0])
+            else:
+                prior_layer = lstm(tf.expand_dims(prior_layer, axis=1))
             outputs = [
                 tf.keras.layers.Dense(NUM_ACTIONS)(prior_layer),
                 tf.keras.layers.Dense(1)(prior_layer),
@@ -90,35 +128,127 @@ class ImpalaModel:
         outputs: AgentOutputs,
         num_steps_to_send: int,
     ) -> AgentOutputs:
-        policy = model_output[0][:NUM_ACTIONS]
-        action = tf.random.categorical(policy, num_samples=1)
+        policy = model_output[:, :NUM_ACTIONS]
+        print(policy)
+        action = int(tf.random.categorical(policy, num_samples=1)[0, 0])
         outputs.actions.append(action)
         outputs.rewards.append(env_state.reward)
         outputs.states.append(env_state.state)
         outputs.policies.append(policy)
         if len(outputs.states) >= num_steps_to_send:
+            logger.debug("Sending outputs to learner. outputs=%s", outputs)
             queue.put(outputs)
-            outputs = AgentOutputs()
+            outputs = AgentOutputs(states=[], actions=[], rewards=[], policies=[])
         return action, outputs
 
-    def _run_actor_loop(self, gym: Gym, queue: Queue, epochs=200, num_steps_to_send=50):
+    def _run_actor_loop(
+        self,
+        gym: Gym,
+        outgoing_trajectory_queue: Queue,
+        incoming_weights_queue: Queue,
+        actor_id: int,
+        epochs=200,
+        num_steps_to_send=50,
+        num_epochs_to_weight_update=10,
+    ):
         max_state_output = gym.max_state_value()
-        for _ in range(epochs):
+        logger.info(
+            "Beginning actor loop for actor %d. epochs=%d, num_steps_to_send=%d, num_epochs_to_weight_update=%d",
+            actor_id,
+            epochs,
+            num_steps_to_send,
+            num_epochs_to_weight_update,
+        )
+        for epoch in range(epochs):
             env_state = gym.reset()
+            logger.debug("epoch=%d, initial_state=%s", epoch, env_state)
             self._lstm.reset_states()
+            if epoch % num_epochs_to_weight_update == 0:
+                logger.debug(
+                    "Actor %d requesting weight update at epoch %d", actor_id, epoch
+                )
+                outgoing_trajectory_queue.put(actor_id)
+                new_weights = incoming_weights_queue.get()
+                logger.debug("Actor %d received new weights to update", actor_id)
+                self._model.set_weights(new_weights)
             # initial_lstm_state = self._lstm.get_initial_state()
-            outputs = AgentOutputs()
+            outputs = AgentOutputs(states=[], actions=[], rewards=[], policies=[])
             while not env_state.is_final:
-                model_output = self._model(env_state.state / max_state_output)
+                env_state.state /= max_state_output
+                env_state.state = np.expand_dims(env_state.state, axis=(0, -1))
+                model_output = self._model(env_state.state)
                 action, outputs = self._determine_action_and_update_outputs(
-                    model_output, env_state, queue, outputs, num_steps_to_send
+                    model_output,
+                    env_state,
+                    outgoing_trajectory_queue,
+                    outputs,
+                    num_steps_to_send,
                 )
                 env_state = gym.step(action)
+            env_state.state /= max_state_output
+            env_state.state = np.expand_dims(env_state.state, axis=(0, -1))
             self._determine_action_and_update_outputs(
-                model_output, env_state, queue, outputs, 0
+                model_output, env_state, outgoing_trajectory_queue, outputs, 0
             )
-        queue.put(None)
+        outgoing_trajectory_queue.put(None)
 
-    def train(self, gym: Gym, queue: Queue, epochs=200, num_steps_to_send=50):
+    def _run_learner_loop(
+        self,
+        incoming_message_queue: "Queue[AgentOutputs | None | int]",
+        outgoing_message_queues: list[Queue],
+    ):
+        num_actors = len(outgoing_message_queues)
+        logger.info("Beginning learner loop with %d actors", num_actors)
+        nones_received = 0
+        while nones_received < num_actors:
+            message = incoming_message_queue.get()
+            logger.debug("Learner received message: %s", message)
+            if message is None:
+                nones_received += 1
+                logger.debug("Learner was told that an actor has finished")
+            elif isinstance(message, int):
+                logger.debug("Learner received weight request from actor %d", message)
+                outgoing_message_queues[message].put(self._model.get_weights())
+            else:
+                logger.debug("Training on trajectory: %s", message)
+                print([message.shape for message in message.states])
+                states = np.concatenate(message.states, axis=0)
+                actions = np.asarray(message.actions)
+                rewards = np.asarray(message.rewards)
+                policies = np.concatenate(message.policies)
+                learner_outputs = self._model(states)
+
+                total_loss = self._model.loss(message, learner_outputs)
+                self._model.optimizer.optimize(total_loss, self._model.weights)
+
+    def train(
+        self,
+        gym: Gym,
+        trajectory_queue: Queue,
+        weights_queues: list[Queue],
+        actor_id: int = None,
+        epochs=200,
+        num_steps_to_send=50,
+    ):
         if self._mode == ModelMode.Actor:
-            self._run_actor_loop(gym, queue, epochs, num_steps_to_send)
+            try:
+                self._run_actor_loop(
+                    gym,
+                    trajectory_queue,
+                    weights_queues[actor_id],
+                    actor_id,
+                    epochs,
+                    num_steps_to_send,
+                )
+            except:
+                logger.error("Something broke")
+                trajectory_queue.put(None)
+                raise
+        else:
+            self._run_learner_loop(trajectory_queue, weights_queues)
+
+    def save_weights_to(self, output):
+        self._model.save_weights(output)
+
+    def load_weights_from(self, weights):
+        self._model.load_weights(weights)
