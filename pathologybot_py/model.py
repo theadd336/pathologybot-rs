@@ -28,32 +28,71 @@ class IMPALALoss(tf.keras.losses.Loss):
         self.discount_factor = discount_factor
 
     def _calculate_rho_s(self, actor_policy, learner_policy) -> tf.Tensor:
-        return tf.minimum(tf.constant([self.rho_bar]), learner_policy / actor_policy)
-    
-    def _calculate_c_t(self, actor_policy, learner_policy) -> tf.Tensor:
-        return tf.minimum(tf.constant([self.c_bar]), learner_policy / actor_policy)
+        return tf.minimum(
+            tf.constant([self.rho_bar]),
+            learner_policy / actor_policy,
+        )
 
-    def _compute_vtrace(self, message: AgentOutputs, y_pred: tf.Tensor):
+    def _calculate_c_s(self, actor_policy, learner_policy) -> tf.Tensor:
+        return tf.minimum(
+            tf.constant([self.c_bar]),
+            learner_policy / actor_policy,
+        )
+
+    def _compute_loss(self, y_true: tf.Tensor, y_pred: tf.Tensor):
+        print(f"Y true shape: {y_true.shape}, Y pred shape: {y_pred.shape}")
         learner_policy = y_pred[:, :NUM_ACTIONS]
-        learner_values = y_pred[:, NUM_ACTIONS]
-        actor_policies = np.concatenate(message.policies, axis=0)
+        learner_values = y_pred[:, NUM_ACTIONS:]
+
+        actor_actions = tf.cast(y_true[:, 0], dtype=tf.dtypes.int32)
+        actor_rewards = y_true[:, 1:2]
+        actor_policies = y_true[:, 2:]
         rho_s = self._calculate_rho_s(actor_policies, learner_policy)
-        delta_t_V = rho_s * (
-            tf.constant(message.rewards[:-1])
+
+        print(f"rho_s shape: {rho_s[:-1].shape}")
+        print(f"rewards shape: {actor_rewards[:-1].shape}")
+        print(f"learner values shape: {learner_values[1:].shape}")
+        delta_t_V = rho_s[:-1] * (
+            actor_rewards[:-1]
             + self.discount_factor * learner_values[1:]
             - learner_values[:-1]
         )
         # TODO: need to figure out the ci product
+        print(f"DV shape: {delta_t_V.shape}")
         c_s = self._calculate_c_s(actor_policies, learner_policy)
-        last_vs = learner_values[:-1] + 
-        print(f"Shape: {y_pred.shape}")
+        last_vs = learner_values[-1] + self.discount_factor * delta_t_V[-1]
+        delta_t_V_len = delta_t_V.shape[0]
+        print(f"len: {delta_t_V_len}")
+        vs = [None] * delta_t_V_len
+        vs[-1] = last_vs[actor_actions[-2]]
+        for i in range(delta_t_V_len - 2, -1, -1):
+            vs_at_step = (
+                learner_values[i]
+                + delta_t_V[i]
+                + self.discount_factor * c_s[i] * (last_vs - learner_values[i + 1])
+            )
+            vs[i] = vs_at_step[actor_actions[i]]
+            last_vs = vs_at_step
 
-    def _compute_value_loss(self, vtrace: np.ndarray, y_pred: tf.Tensor) -> tf.Tensor:
-        pass
+        print(f"VS: {vs}")
+        vs_tensor = tf.stack(vs)
+        print(f"VS tensor: {vs_tensor}")
 
-    def call(self, y_true: AgentOutputs, y_pred: tf.Tensor) -> tf.Tensor:
-        vtrace = self._compute_vtrace(y_true, y_pred)
-        return 0.5 * (y_true - y_pred) ** 2
+        # TODO: Hyperparameters for the different loss types
+        total_loss = self._compute_value_loss(vs_tensor, learner_values)
+        # total_loss += self._compute_policy_loss()
+
+        return total_loss
+
+    def _compute_value_loss(
+        self, vtrace: tf.Tensor, learner_values: tf.Tensor
+    ) -> tf.Tensor:
+        return tf.reduce_sum(vtrace - learner_values)
+
+    # def _compute_policy_loss(rho_s, learner_policy, rewards, )
+
+    def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+        return self._compute_loss(y_true, y_pred)
 
     def __call__(self, y_true, y_pred, sample_weight=None):
         return self.call(y_true, y_pred)
@@ -129,7 +168,6 @@ class ImpalaModel:
         num_steps_to_send: int,
     ) -> AgentOutputs:
         policy = model_output[:, :NUM_ACTIONS]
-        print(policy)
         action = int(tf.random.categorical(policy, num_samples=1)[0, 0])
         outputs.actions.append(action)
         outputs.rewards.append(env_state.reward)
@@ -170,6 +208,12 @@ class ImpalaModel:
                 outgoing_trajectory_queue.put(actor_id)
                 new_weights = incoming_weights_queue.get()
                 logger.debug("Actor %d received new weights to update", actor_id)
+                if new_weights is None:
+                    logger.warning(
+                        "Actor %d was told that learner crashed. Aborting.", actor_id
+                    )
+                    outgoing_trajectory_queue.put(None)
+                    return
                 self._model.set_weights(new_weights)
             # initial_lstm_state = self._lstm.get_initial_state()
             outputs = AgentOutputs(states=[], actions=[], rewards=[], policies=[])
@@ -200,26 +244,36 @@ class ImpalaModel:
         num_actors = len(outgoing_message_queues)
         logger.info("Beginning learner loop with %d actors", num_actors)
         nones_received = 0
+        error_occurred = False
         while nones_received < num_actors:
             message = incoming_message_queue.get()
             logger.debug("Learner received message: %s", message)
             if message is None:
                 nones_received += 1
                 logger.debug("Learner was told that an actor has finished")
+            elif error_occurred:
+                continue
             elif isinstance(message, int):
                 logger.debug("Learner received weight request from actor %d", message)
                 outgoing_message_queues[message].put(self._model.get_weights())
             else:
-                logger.debug("Training on trajectory: %s", message)
-                print([message.shape for message in message.states])
-                states = np.concatenate(message.states, axis=0)
-                actions = np.asarray(message.actions)
-                rewards = np.asarray(message.rewards)
-                policies = np.concatenate(message.policies)
-                learner_outputs = self._model(states)
+                try:
+                    logger.debug("Training on trajectory: %s", message)
+                    states = np.concatenate(message.states, axis=0)
+                    actions = np.expand_dims(np.asarray(message.actions), axis=1)
+                    rewards = np.expand_dims(np.asarray(message.rewards), axis=1)
+                    policies = np.concatenate(message.policies, axis=0)
 
-                total_loss = self._model.loss(message, learner_outputs)
-                self._model.optimizer.optimize(total_loss, self._model.weights)
+                    print(
+                        f"Shapes: {states.shape}, {actions.shape}, {rewards.shape}, {policies.shape}"
+                    )
+                    vtrace_input = np.hstack([actions, rewards, policies])
+                    self._model.train_on_batch(x=states, y=vtrace_input)
+                except:
+                    logger.exception("Fatal error in learner. Aborting training.")
+                    for queue in outgoing_message_queues:
+                        queue.put(None)
+                    error_occurred = True
 
     def train(
         self,
@@ -243,7 +297,7 @@ class ImpalaModel:
             except:
                 logger.error("Something broke")
                 trajectory_queue.put(None)
-                raise
+                return
         else:
             self._run_learner_loop(trajectory_queue, weights_queues)
 
