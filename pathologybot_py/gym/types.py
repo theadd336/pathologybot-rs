@@ -9,6 +9,7 @@ class EnvState:
     state: np.ndarray
     reward: float
     is_final: bool
+    termination_condition: bool
 
 
 class Gym(ABC):

@@ -40,56 +40,72 @@ class IMPALALoss(tf.keras.losses.Loss):
         )
 
     def _compute_loss(self, y_true: tf.Tensor, y_pred: tf.Tensor):
-        print(f"Y true shape: {y_true.shape}, Y pred shape: {y_pred.shape}")
-        learner_policy = y_pred[:, :NUM_ACTIONS]
+        def scanfn(acc, sequence):
+            discount_t, c_t, delta_V = sequence
+            return delta_V + discount_t * c_t * acc
+
+        learner_policy = tf.nn.softmax(y_pred[:, :NUM_ACTIONS])
         learner_values = y_pred[:, NUM_ACTIONS:]
 
-        actor_actions = tf.cast(y_true[:, 0], dtype=tf.dtypes.int32)
+        actor_actions = tf.expand_dims(tf.cast(y_true[:, 0], dtype=tf.dtypes.int32), 1)
         actor_rewards = y_true[:, 1:2]
-        actor_policies = y_true[:, 2:]
+        actor_policies = tf.nn.softmax(y_true[:, 2:])
         rho_s = self._calculate_rho_s(actor_policies, learner_policy)
-
-        print(f"rho_s shape: {rho_s[:-1].shape}")
-        print(f"rewards shape: {actor_rewards[:-1].shape}")
-        print(f"learner values shape: {learner_values[1:].shape}")
+        actual_actor_policy = tf.gather_nd(actor_policies, actor_actions, batch_dims=1)
+        actual_learner_policy = tf.gather_nd(
+            learner_policy, actor_actions, batch_dims=1
+        )
+        rho_s = self._calculate_rho_s(actual_actor_policy, actual_learner_policy)
         delta_t_V = rho_s[:-1] * (
             actor_rewards[:-1]
             + self.discount_factor * learner_values[1:]
             - learner_values[:-1]
         )
-        # TODO: need to figure out the ci product
-        print(f"DV shape: {delta_t_V.shape}")
-        c_s = self._calculate_c_s(actor_policies, learner_policy)
-        last_vs = learner_values[-1] + self.discount_factor * delta_t_V[-1]
-        delta_t_V_len = delta_t_V.shape[0]
-        print(f"len: {delta_t_V_len}")
-        vs = [None] * delta_t_V_len
-        vs[-1] = last_vs[actor_actions[-2]]
-        for i in range(delta_t_V_len - 2, -1, -1):
-            vs_at_step = (
-                learner_values[i]
-                + delta_t_V[i]
-                + self.discount_factor * c_s[i] * (last_vs - learner_values[i + 1])
-            )
-            vs[i] = vs_at_step[actor_actions[i]]
-            last_vs = vs_at_step
-
-        print(f"VS: {vs}")
-        vs_tensor = tf.stack(vs)
-        print(f"VS tensor: {vs_tensor}")
+        c_s = self._calculate_c_s(actual_actor_policy, actual_learner_policy)
+        sequences = (
+            tf.zeros_like(delta_t_V) + self.discount_factor,
+            c_s[:-1],
+            delta_t_V,
+        )
+        initial_values = tf.zeros_like(delta_t_V)
+        vs_without_value_addition = tf.scan(
+            fn=scanfn,
+            elems=sequences,
+            initializer=initial_values,
+            parallel_iterations=1,
+            reverse=True,
+        )
+        vs = vs_without_value_addition + learner_values[:-1]
 
         # TODO: Hyperparameters for the different loss types
-        total_loss = self._compute_value_loss(vs_tensor, learner_values)
-        # total_loss += self._compute_policy_loss()
+        total_loss = self._compute_value_loss(vs, learner_values)
+        total_loss += self._compute_policy_loss(
+            rho_s, actual_learner_policy, actor_rewards, vs, learner_values
+        )
+        total_loss += self._compute_entropy_loss(learner_policy)
 
         return total_loss
 
     def _compute_value_loss(
         self, vtrace: tf.Tensor, learner_values: tf.Tensor
     ) -> tf.Tensor:
-        return tf.reduce_sum(vtrace - learner_values)
+        return tf.reduce_sum(vtrace - learner_values[:-1])
 
-    # def _compute_policy_loss(rho_s, learner_policy, rewards, )
+    def _compute_policy_loss(
+        self, rho_s, actual_learner_policy, rewards, vs, learner_values
+    ):
+        return tf.reduce_sum(
+            tf.math.log(actual_learner_policy[:-1])
+            * tf.stop_gradient(
+                rho_s[:-1]
+                * (rewards[:-1] + self.discount_factor * vs[1:] - learner_values[:-1])
+            )
+        )
+
+    def _compute_entropy_loss(self, learner_policy):
+        return -tf.reduce_sum(
+            tf.reduce_sum(learner_policy * tf.math.log(learner_policy), axis=-1)
+        )
 
     def call(self, y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
         return self._compute_loss(y_true, y_pred)
@@ -215,7 +231,6 @@ class ImpalaModel:
                     outgoing_trajectory_queue.put(None)
                     return
                 self._model.set_weights(new_weights)
-            # initial_lstm_state = self._lstm.get_initial_state()
             outputs = AgentOutputs(states=[], actions=[], rewards=[], policies=[])
             while not env_state.is_final:
                 env_state.state /= max_state_output
@@ -263,10 +278,6 @@ class ImpalaModel:
                     actions = np.expand_dims(np.asarray(message.actions), axis=1)
                     rewards = np.expand_dims(np.asarray(message.rewards), axis=1)
                     policies = np.concatenate(message.policies, axis=0)
-
-                    print(
-                        f"Shapes: {states.shape}, {actions.shape}, {rewards.shape}, {policies.shape}"
-                    )
                     vtrace_input = np.hstack([actions, rewards, policies])
                     self._model.train_on_batch(x=states, y=vtrace_input)
                 except:
@@ -300,6 +311,24 @@ class ImpalaModel:
                 return
         else:
             self._run_learner_loop(trajectory_queue, weights_queues)
+
+    def evaluate(self, gym: Gym, state: EnvState):
+        logger.info("Evaluating round with par: %s", gym._par)
+        turns = 0
+        max_state_output = gym.max_state_value()
+        while not state.is_final:
+            turns += 1
+            state.state /= max_state_output
+            state.state = np.expand_dims(state.state, axis=(0, -1))
+            model_output = self._model(state.state)
+            policy = model_output[:, :NUM_ACTIONS]
+            action = int(tf.random.categorical(policy, num_samples=1)[0, 0])
+            state = gym.step(action)
+
+        if state.termination_condition:
+            logger.info("Won the stage in %d turns", turns)
+        else:
+            logger.info("Lost :(")
 
     def save_weights_to(self, output):
         self._model.save_weights(output)

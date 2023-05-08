@@ -111,7 +111,9 @@ class PathologyGym(Gym):
         self._par = par
         self._steps = 0
         self._player_pos = player_pos
-        return EnvState(state=start_state, reward=0.0, is_final=False)
+        return EnvState(
+            state=start_state, reward=0.0, is_final=False, termination_condition=False
+        )
 
     def step(self, action: int) -> EnvState:
         if action > self._NUM_ACTIONS or action < 0:
@@ -123,9 +125,19 @@ class PathologyGym(Gym):
         finish_type = self._is_final(self._steps, tentative_player_pos)
 
         if finish_type is None and blocked:
-            return EnvState(state=self._state, reward=_STEP_REWARD, is_final=False)
+            return EnvState(
+                state=self._state,
+                reward=_STEP_REWARD,
+                is_final=False,
+                termination_condition=False,
+            )
         elif finish_type is not None and blocked:
-            return EnvState(state=self._state, reward=_LOSS_REWARD, is_final=True)
+            return EnvState(
+                state=self._state,
+                reward=_LOSS_REWARD,
+                is_final=True,
+                termination_condition=False,
+            )
 
         self._player_pos = tentative_player_pos
         self._state = self._update_state(
@@ -133,8 +145,18 @@ class PathologyGym(Gym):
         )
         self._player_pos = tentative_player_pos
         if finish_type is not None:
-            return EnvState(state=self._state, reward=_VICTORY_REWARD, is_final=True)
-        return EnvState(state=self._state, reward=_STEP_REWARD, is_final=False)
+            return EnvState(
+                state=self._state,
+                reward=_VICTORY_REWARD,
+                is_final=True,
+                termination_condition=True,
+            )
+        return EnvState(
+            state=self._state,
+            reward=_STEP_REWARD,
+            is_final=False,
+            termination_condition=False,
+        )
 
     def max_state_value(self) -> float | None:
         return BlockType.max_value()
