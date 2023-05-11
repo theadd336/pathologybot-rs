@@ -106,3 +106,12 @@ def test_compute_value_loss(learner_values):
     loss = IMPALALoss(NUM_ACTIONS)
     value_loss = loss._compute_value_loss(mock_vtrace, learner_values)
     assert tf.reduce_all(tf.math.equal(value_loss, tf.convert_to_tensor(-6.0)))
+
+def test_compute_policy_loss():
+    assert True
+
+def test_compute_entropy_loss(learner_policy):
+    loss = IMPALALoss(NUM_ACTIONS)
+    outputs = loss._compute_entropy_loss(learner_policy)
+    assert outputs == tf.constant(2.16534019074)
+
