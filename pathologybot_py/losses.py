@@ -33,9 +33,11 @@ class IMPALALoss(tf.keras.losses.Loss):
         actor_rewards = y_true[:, 1:2]
         actor_policies = tf.nn.softmax(y_true[:, 2:])
         rho_s = self._calculate_rho_s(actor_policies, learner_policy)
-        actual_actor_policy = tf.gather_nd(actor_policies, actor_actions, batch_dims=1)
-        actual_learner_policy = tf.gather_nd(
-            learner_policy, actor_actions, batch_dims=1
+        actual_actor_policy = tf.expand_dims(
+            tf.gather_nd(actor_policies, actor_actions, batch_dims=1), axis=1
+        )
+        actual_learner_policy = tf.expand_dims(
+            tf.gather_nd(learner_policy, actor_actions, batch_dims=1), axis=1
         )
         rho_s = self._calculate_rho_s(actual_actor_policy, actual_learner_policy)
         delta_t_V = rho_s[:-1] * (
