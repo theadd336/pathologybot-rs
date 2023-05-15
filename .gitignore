@@ -12,3 +12,5 @@ Cargo.lock
 **/*__pycache__*
 logs
 test_logs.log
+checkpoint
+learned_weights*

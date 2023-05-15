@@ -221,8 +221,8 @@ class ImpalaModel:
                         x=states,
                         y=vtrace_input,
                         epochs=1,
-                        verbose=epoch % 100 == 0,
-                        initial_epoch=epoch,
+                        verbose=int(epoch % 100 == 0),
+                        # initial_epoch=epoch,
                         callbacks=[tensorboard_callback],
                     )
                     epoch += 1
