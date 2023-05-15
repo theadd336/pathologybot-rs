@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pathologybot_py"
+version = "0.1.0"
+dependencies = [
+    "click",
+    "tensorflow",
+    "numpy",
+]
+
+[tool.setuptools]
+packages = ["pathologybot_py"]
