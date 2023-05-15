@@ -195,9 +195,7 @@ class ImpalaModel:
         nones_received = 0
         error_occurred = False
         epoch = 1
-        tensorboard_callback = tf.keras.callbacks.TensorBoard(
-            log_dir="./logs", histogram_freq=1
-        )
+        tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir="./logs")
         while nones_received < num_actors:
             message = incoming_message_queue.get()
             logger.debug("Learner received message: %s", message)
@@ -220,9 +218,9 @@ class ImpalaModel:
                     self._model.fit(
                         x=states,
                         y=vtrace_input,
-                        epochs=1,
+                        epochs=epoch + 1,
                         verbose=int(epoch % 100 == 0),
-                        # initial_epoch=epoch,
+                        initial_epoch=epoch,
                         callbacks=[tensorboard_callback],
                     )
                     epoch += 1

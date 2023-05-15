@@ -29,7 +29,7 @@ def run_actor(
 ):
     actor = ImpalaModel(ModelSize.Smol, mode=ModelMode.Actor, name=f"Actor{actor_id}")
     gym = PathologyGym(test_mode=True)
-    actor.train(gym, trajectory_queue, weights_queues, actor_id, epochs=150)
+    actor.train(gym, trajectory_queue, weights_queues, actor_id, epochs=50)
 
 
 def main():
