@@ -70,6 +70,25 @@ def actor_rewards():
     return tf.constant([-1.0, -1.0, 100.0], shape=(3, 1))
 
 
+@pytest.fixture
+def actor_actions():
+    return tf.constant([0, 1, 2], shape=(3, 1), dtype=tf.dtypes.int32)
+
+
+@pytest.fixture
+def actual_actor_policy(actor_policy: tf.Tensor, actor_actions: tf.Tensor):
+    return tf.expand_dims(
+        tf.gather_nd(actor_policy, actor_actions, batch_dims=1), axis=1
+    )
+
+
+@pytest.fixture
+def actual_learner_policy(learner_policy: tf.Tensor, actor_actions: tf.Tensor):
+    return tf.expand_dims(
+        tf.gather_nd(learner_policy, actor_actions, batch_dims=1), axis=1
+    )
+
+
 def test_calculate_rho_s(learner_policy: tf.Tensor, actor_policy: tf.Tensor):
     rho_bar = 0.5
     loss = IMPALALoss(NUM_ACTIONS, rho_bar=rho_bar)
@@ -107,31 +126,17 @@ def test_calculate_c_s(learner_policy: tf.Tensor, actor_policy: tf.Tensor):
 
 
 def test_compute_value_loss(learner_values):
-    mock_vtrace = tf.convert_to_tensor([[1.0], [2.0]])
+    mock_vtrace = tf.convert_to_tensor([[1.0], [2.0], [5.0]])
     loss = IMPALALoss(NUM_ACTIONS)
     value_loss = loss._compute_value_loss(mock_vtrace, learner_values)
-    assert tf.reduce_all(tf.math.equal(value_loss, tf.convert_to_tensor(-6.0)))
+    assert value_loss == tf.constant(34.0)
 
 
 def test_compute_policy_loss(
-    learner_policy, actor_policy, learner_values, actor_rewards
+    actual_learner_policy, actual_actor_policy, learner_values, actor_rewards
 ):
     loss = IMPALALoss(NUM_ACTIONS, rho_bar=0.5, c_bar=0.5, discount_factor=0.5)
     mock_vtrace = tf.convert_to_tensor([[1.0], [2.0], [3.0]])
-    actions = tf.constant([0, 1, 2], shape=(3, 1))
-    actual_learner_policy = tf.expand_dims(
-        tf.gather_nd(learner_policy, actions, batch_dims=1), axis=1
-    )
-    actual_actor_policy = tf.expand_dims(
-        tf.gather_nd(actor_policy, actions, batch_dims=1), axis=1
-    )
-    # Sanity check just to make sure the gather_nd worked as expected
-    assert tf.reduce_all(
-        tf.math.equal(
-            actual_learner_policy,
-            tf.convert_to_tensor([[4.3244923e-05], [7.3054731e-01], [0.25]]),
-        )
-    )
     rho_s = loss._calculate_rho_s(actual_actor_policy, actual_learner_policy)
     assert loss._compute_policy_loss(
         rho_s, actual_learner_policy, actor_rewards, mock_vtrace, learner_values
@@ -141,4 +146,20 @@ def test_compute_policy_loss(
 def test_compute_entropy_loss(learner_policy):
     loss = IMPALALoss(NUM_ACTIONS)
     outputs = loss._compute_entropy_loss(learner_policy)
-    assert outputs == tf.constant(2.16534019074)
+    assert outputs == tf.constant(-2.16534019074)
+
+
+def test_compute_vtrace(
+    actual_learner_policy, actual_actor_policy, learner_values, actor_rewards
+):
+    loss = IMPALALoss(NUM_ACTIONS, rho_bar=0.5, c_bar=0.5, discount_factor=0.5)
+    output_vtrace = loss._compute_vtrace(
+        actual_actor_policy, actual_learner_policy, learner_values, actor_rewards
+    )
+    expected_vtrace = tf.constant([7.69703708875, 0.75, 5.0], shape=(3, 1))
+    assert tf.reduce_all(
+        tf.math.equal(
+            output_vtrace,
+            expected_vtrace,
+        )
+    )

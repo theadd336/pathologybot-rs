@@ -17,7 +17,7 @@ def setup_logging():
 
 
 def run_learner(incoming_queue: Queue, outgoing_queues: list[Queue]):
-    learner = ImpalaModel(ModelSize.Smol, mode=ModelMode.Learner)
+    learner = ImpalaModel(ModelSize.Smol, mode=ModelMode.Learner, name="Learner")
     learner.train(None, incoming_queue, outgoing_queues)
     learner.save_weights_to("./learned_weights")
 
@@ -27,9 +27,9 @@ def run_actor(
     weights_queues: list[Queue],
     actor_id: int,
 ):
-    actor = ImpalaModel(ModelSize.Smol, mode=ModelMode.Actor)
+    actor = ImpalaModel(ModelSize.Smol, mode=ModelMode.Actor, name=f"Actor{actor_id}")
     gym = PathologyGym(test_mode=True)
-    actor.train(gym, trajectory_queue, weights_queues, actor_id, epochs=2000)
+    actor.train(gym, trajectory_queue, weights_queues, actor_id, epochs=100)
 
 
 def main():
@@ -49,7 +49,7 @@ def main():
     for actor in actor_p_list:
         actor.join()
 
-    player = ImpalaModel(ModelSize.Smol)
+    player = ImpalaModel(ModelSize.Smol, name="player")
     player.load_weights_from("./learned_weights")
     gym = PathologyGym(test_mode=True)
     for _ in range(30):

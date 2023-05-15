@@ -5,6 +5,7 @@ from multiprocessing import Queue
 
 import numpy as np
 import tensorflow as tf
+import tensorboard as tb
 
 from pathologybot_py.gym.types import Gym, EnvState
 from pathologybot_py.losses import IMPALALoss
@@ -33,10 +34,12 @@ class ModelMode(Enum):
 
 class ImpalaModel:
     def __init__(self, size: ModelSize, mode=ModelMode.Actor, name=""):
+        tf.random.set_seed(1)
         if size == ModelSize.Smol:
             input = tf.keras.Input(
                 shape=(40, 40, 1),
                 batch_size=1 if mode == ModelMode.Actor else None,
+                name=f"{name}-InputLayer",
             )
             layers = [
                 tf.keras.layers.Conv2D(
@@ -44,34 +47,55 @@ class ImpalaModel:
                     kernel_size=8,
                     strides=(4, 4),
                     activation="relu",
+                    name=f"{name}-LargeConv2D",
                 ),
                 tf.keras.layers.Conv2D(
-                    filters=32, kernel_size=4, strides=(2, 2), activation="relu"
+                    filters=32,
+                    kernel_size=4,
+                    strides=(2, 2),
+                    activation="relu",
+                    name=f"{name}-SmallConv2D",
                 ),
-                tf.keras.layers.Flatten(),
-                tf.keras.layers.Dense(units=256, activation="relu"),
+                tf.keras.layers.Flatten(name=f"{name}-Flatten"),
+                tf.keras.layers.Dense(
+                    units=256, activation="relu", name=f"{name}-Dense"
+                ),
             ]
             lstm = tf.keras.layers.LSTM(
                 256,
                 stateful=mode == ModelMode.Actor,
                 return_sequences=mode == ModelMode.Learner,
+                name=f"{name}-LSTM",
             )
             prior_layer = input
             for layer in layers:
                 prior_layer = layer(prior_layer)
             if mode == ModelMode.Learner:
-                prior_layer = tf.expand_dims(prior_layer, axis=0)
+                prior_layer = tf.expand_dims(
+                    prior_layer, axis=0, name=f"{name}-LearnerBranchExpandDims"
+                )
                 prior_layer = lstm(prior_layer)
-                prior_layer = tf.squeeze(prior_layer, axis=[0])
+                prior_layer = tf.squeeze(
+                    prior_layer, axis=[0], name=f"{name}-LearnerBranchSqueezeDims"
+                )
             else:
-                prior_layer = lstm(tf.expand_dims(prior_layer, axis=1))
+                prior_layer = lstm(
+                    tf.expand_dims(
+                        prior_layer, axis=1, name=f"{name}-ActorBranchExpandDims"
+                    )
+                )
             outputs = [
-                tf.keras.layers.Dense(NUM_ACTIONS)(prior_layer),
-                tf.keras.layers.Dense(1)(prior_layer),
+                tf.keras.layers.Dense(NUM_ACTIONS, name=f"{name}-PolicyOutput")(
+                    prior_layer
+                ),
+                tf.keras.layers.Dense(1, name=f"{name}-ValueOutput")(prior_layer),
             ]
 
             model = tf.keras.Model(
-                inputs=input, outputs=tf.keras.layers.Concatenate(axis=-1)(outputs)
+                inputs=input,
+                outputs=tf.keras.layers.Concatenate(
+                    axis=-1, name=f"{name}-ConcateOutputs"
+                )(outputs),
             )
         else:
             raise NotImplementedError()
@@ -92,7 +116,6 @@ class ImpalaModel:
         num_steps_to_send: int,
     ) -> AgentOutputs:
         policy = model_output[:, :NUM_ACTIONS]
-        print(f"Policy shape: {policy.shape}")
         action = int(tf.random.categorical(policy, num_samples=1)[0, 0])
         if action == 4:
             print(policy.numpy())
@@ -171,6 +194,10 @@ class ImpalaModel:
         logger.info("Beginning learner loop with %d actors", num_actors)
         nones_received = 0
         error_occurred = False
+        epoch = 1
+        tensorboard_callback = tf.keras.callbacks.TensorBoard(
+            log_dir="./logs", histogram_freq=1
+        )
         while nones_received < num_actors:
             message = incoming_message_queue.get()
             logger.debug("Learner received message: %s", message)
@@ -190,7 +217,15 @@ class ImpalaModel:
                     rewards = np.expand_dims(np.asarray(message.rewards), axis=1)
                     policies = np.concatenate(message.policies, axis=0)
                     vtrace_input = np.hstack([actions, rewards, policies])
-                    self._model.train_on_batch(x=states, y=vtrace_input)
+                    self._model.fit(
+                        x=states,
+                        y=vtrace_input,
+                        epochs=1,
+                        verbose=epoch % 100 == 0,
+                        initial_epoch=epoch,
+                        callbacks=[tensorboard_callback],
+                    )
+                    epoch += 1
                 except:
                     logger.exception("Fatal error in learner. Aborting training.")
                     for queue in outgoing_message_queues:
@@ -233,7 +268,7 @@ class ImpalaModel:
             state.state = np.expand_dims(state.state, axis=(0, -1))
             model_output = self._model(state.state)
             policy = model_output[:, :NUM_ACTIONS]
-            action = int(tf.random.categorical(policy, num_samples=1)[0, 0]) - 1
+            action = int(tf.random.categorical(policy, num_samples=1)[0, 0])
             state = gym.step(action)
 
         if state.termination_condition:

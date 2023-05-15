@@ -5,7 +5,7 @@ import numpy as np
 
 from pathologybot_py.gym.types import Gym, EnvState, InvalidActionError
 
-_STEP_REWARD = -1.0
+_STEP_REWARD = 0.0
 _LOSS_REWARD = 0.0
 _VICTORY_REWARD = 300.0
 
