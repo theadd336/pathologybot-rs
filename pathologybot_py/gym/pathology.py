@@ -5,9 +5,9 @@ import numpy as np
 
 from pathologybot_py.gym.types import Gym, EnvState, InvalidActionError
 
-_STEP_REWARD = 0.0
+_STEP_REWARD = -1.0
 _LOSS_REWARD = 0.0
-_VICTORY_REWARD = 300.0
+_VICTORY_REWARD = 100.0
 
 
 class Difficulty(Enum):
@@ -60,6 +60,7 @@ class FinishType(Enum):
 class _LevelGenerator:
     def __init__(self, test_mode=False) -> None:
         self.test_mode = test_mode
+        np.random.seed(0)
 
     def generate(
         self,
