@@ -14,3 +14,4 @@ logs
 test_logs.log
 checkpoint
 learned_weights*
+__pycache__
